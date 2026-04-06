@@ -1,0 +1,97 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout dbaas-service
+        uses: actions/checkout@v4
+        with:
+          path: dbaas-service
+
+      - name: Checkout etafovivian-shared
+        uses: actions/checkout@v4
+        with:
+          repository: etafovivian/etafovivian-shared
+          token: ${{ secrets.SHARED_REPO_TOKEN }}
+          path: etafovivian-shared
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.26"
+          cache-dependency-path: dbaas-service/go.sum
+
+      - name: Rewrite replace directive for CI layout
+        working-directory: dbaas-service
+        run: go mod edit -replace github.com/etafovivian/shared=../etafovivian-shared
+
+      - name: Run tests
+        working-directory: dbaas-service
+        run: go test -race -count=1 -timeout 120s -cover ./...
+
+      - name: Lint
+        uses: golangci/golangci-lint-action@v8
+        with:
+          version: v2.10.1
+          working-directory: dbaas-service
+        continue-on-error: true
+
+      - name: Build
+        working-directory: dbaas-service
+        run: go build ./...
+
+  docker:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: test
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Checkout dbaas-service
+        uses: actions/checkout@v4
+        with:
+          path: dbaas-service
+
+      - name: Checkout etafovivian-shared
+        uses: actions/checkout@v4
+        with:
+          repository: etafovivian/etafovivian-shared
+          token: ${{ secrets.SHARED_REPO_TOKEN }}
+          path: etafovivian-shared
+
+      - name: Login to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push dbaas-service
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: dbaas-service/Dockerfile
+          push: true
+          build-args: VERSION=${{ github.sha }}
+          tags: |
+            ghcr.io/etafovivian/dbaas-service:${{ github.sha }}
+            ghcr.io/etafovivian/dbaas-service:latest
+
+      - name: Build and push dbaas-agent
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: dbaas-service/Dockerfile.agent
+          push: true
+          build-args: VERSION=${{ github.sha }}
+          tags: |
+            ghcr.io/etafovivian/dbaas-agent:${{ github.sha }}
+            ghcr.io/etafovivian/dbaas-agent:latest

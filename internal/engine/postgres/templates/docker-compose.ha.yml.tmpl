@@ -1,0 +1,49 @@
+services:
+  postgres:
+    image: postgres:{{.EngineVersion}}-alpine
+    container_name: dbaas-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: {{.AdminUser}}
+      POSTGRES_PASSWORD: {{.AdminPassword}}
+      PGDATA: /var/lib/postgresql/data/pgdata
+    volumes:
+      - /var/lib/postgresql/data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U {{.AdminUser}}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    shm_size: 256m
+
+  pgbouncer:
+    image: bitnami/pgbouncer:latest
+    container_name: dbaas-pgbouncer
+    restart: unless-stopped
+    environment:
+      PGBOUNCER_DATABASE: "*"
+      POSTGRESQL_HOST: postgres
+      POSTGRESQL_PORT: "5432"
+      POSTGRESQL_USERNAME: {{.AdminUser}}
+      POSTGRESQL_PASSWORD: {{.AdminPassword}}
+      PGBOUNCER_POOL_MODE: transaction
+      PGBOUNCER_MAX_CLIENT_CONN: "200"
+      PGBOUNCER_DEFAULT_POOL_SIZE: "25"
+    ports:
+      - "6432:6432"
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  dbaas-agent:
+    image: ghcr.io/etafovivian/dbaas-agent:{{.AgentVersion}}
+    container_name: dbaas-agent
+    restart: unless-stopped
+    env_file:
+      - /etc/dbaas/instance.env
+    network_mode: host
+    depends_on:
+      postgres:
+        condition: service_healthy

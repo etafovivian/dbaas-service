@@ -1,0 +1,63 @@
+#cloud-config
+
+write_files:
+  - path: /etc/dbaas/instance.env
+    permissions: "0600"
+    content: |
+      INSTANCE_ID={{.InstanceID}}
+      NODE_ID={{.NodeID}}
+      NODE_INDEX={{.NodeIndex}}
+      NATS_URL={{.NATSUrl}}
+      TIER={{.Tier}}
+      AGENT_VERSION={{.AgentVersion}}
+{{- range $k, $v := .EngineEnvVars}}
+      {{$k}}={{$v}}
+{{- end}}
+
+  - path: /etc/dbaas/docker-compose.yml
+    permissions: "0644"
+    content: |
+{{indent 6 .ComposeYAML}}
+
+runcmd:
+  # Find the data volume (second disk, not root)
+  - |
+    DATA_DEV=""
+    for dev in /dev/vdb /dev/sdb /dev/xvdb; do
+      if [ -b "$dev" ]; then
+        DATA_DEV="$dev"
+        break
+      fi
+    done
+    if [ -z "$DATA_DEV" ]; then
+      echo "ERROR: No data volume found" >> /var/log/dbaas-init.log
+      exit 1
+    fi
+    echo "Found data volume: $DATA_DEV" >> /var/log/dbaas-init.log
+
+  # Format if needed
+  - |
+    DATA_DEV=""
+    for dev in /dev/vdb /dev/sdb /dev/xvdb; do
+      [ -b "$dev" ] && DATA_DEV="$dev" && break
+    done
+    if ! blkid "$DATA_DEV" | grep -q ext4; then
+      mkfs.ext4 -F "$DATA_DEV"
+      echo "Formatted $DATA_DEV as ext4" >> /var/log/dbaas-init.log
+    fi
+
+  # Mount data volume to engine-specific directory
+  - mkdir -p {{.DataDir}}
+  - |
+    DATA_DEV=""
+    for dev in /dev/vdb /dev/sdb /dev/xvdb; do
+      [ -b "$dev" ] && DATA_DEV="$dev" && break
+    done
+    mount "$DATA_DEV" {{.DataDir}}
+    echo "$DATA_DEV {{.DataDir}} ext4 defaults,nofail 0 2" >> /etc/fstab
+    chown -R {{.DataDirOwner}} {{.DataDir}}
+    echo "Mounted $DATA_DEV to {{.DataDir}}" >> /var/log/dbaas-init.log
+
+  # Start services
+  - cd /etc/dbaas && docker compose up -d
+  - echo "Docker Compose started" >> /var/log/dbaas-init.log

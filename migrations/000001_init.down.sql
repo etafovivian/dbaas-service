@@ -1,0 +1,6 @@
+DROP TABLE IF EXISTS configurations;
+DROP TABLE IF EXISTS backups;
+DROP TABLE IF EXISTS users;
+DROP TABLE IF EXISTS databases;
+DROP TABLE IF EXISTS instance_nodes;
+DROP TABLE IF EXISTS instances;
