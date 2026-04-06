@@ -28,6 +28,7 @@ type StoreClient interface {
 	UpdateInstanceProjectID(ctx context.Context, id, projectID string) error
 	UpdateInstanceBackupBucket(ctx context.Context, id, bucket string) error
 	SoftDeleteInstance(ctx context.Context, id string) error
+	UpdateInstanceSecgroupID(ctx context.Context, id, secgroupID string) error
 	// Nodes
 	CreateNode(ctx context.Context, instanceID string, nodeIndex int) (*store.InstanceNode, error)
 	GetNodesByInstance(ctx context.Context, instanceID string) ([]*store.InstanceNode, error)
@@ -40,6 +41,24 @@ type StoreClient interface {
 	UpdateNodeHeartbeat(ctx context.Context, nodeID, role string) error
 	CountReadyNodes(ctx context.Context, instanceID string) (int, error)
 	GetInstanceByNodeID(ctx context.Context, nodeID string) (*store.Instance, error)
+	// Databases
+	CreateDatabase(ctx context.Context, instanceID, tenantID, name, charset, collation string) (*store.Database, error)
+	GetDatabase(ctx context.Context, id string) (*store.Database, error)
+	ListDatabases(ctx context.Context, instanceID string) ([]*store.Database, error)
+	UpdateDatabaseStatus(ctx context.Context, id, status string) error
+	SoftDeleteDatabase(ctx context.Context, id string) error
+	// Users
+	CreateUser(ctx context.Context, instanceID, tenantID, username, role string, databases []string) (*store.User, error)
+	GetUser(ctx context.Context, id string) (*store.User, error)
+	ListUsers(ctx context.Context, instanceID string) ([]*store.User, error)
+	UpdateUserStatus(ctx context.Context, id, status string) error
+	SoftDeleteUser(ctx context.Context, id string) error
+	// Firewall Rules
+	CreateFirewallRule(ctx context.Context, instanceID, tenantID, direction, protocol string, portMin, portMax *int, remoteIPPrefix, description string) (*store.FirewallRule, error)
+	UpdateFirewallRuleOpenstackID(ctx context.Context, id, ruleID string) error
+	ListFirewallRules(ctx context.Context, instanceID string) ([]*store.FirewallRule, error)
+	GetFirewallRule(ctx context.Context, id string) (*store.FirewallRule, error)
+	SoftDeleteFirewallRule(ctx context.Context, id string) error
 }
 
 // Deps holds injected dependencies for the handler package.
@@ -116,6 +135,19 @@ func (h *Handler) RegisterSubscriptions(nc *nats.Conn) error {
 		"dbaas.instance.get":    h.handleInstanceGet,
 		"dbaas.instance.list":   h.handleInstanceList,
 		"dbaas.instance.delete": h.handleInstanceDelete,
+		// Database CRUD
+		"dbaas.database.create": h.handleDatabaseCreate,
+		"dbaas.database.list":   h.handleDatabaseList,
+		"dbaas.database.delete": h.handleDatabaseDelete,
+		// User CRUD
+		"dbaas.user.create":         h.handleUserCreate,
+		"dbaas.user.list":           h.handleUserList,
+		"dbaas.user.delete":         h.handleUserDelete,
+		"dbaas.user.reset-password": h.handleUserResetPassword,
+		// Firewall rules
+		"dbaas.firewall.add-rule":    h.handleFirewallAddRule,
+		"dbaas.firewall.list-rules":  h.handleFirewallListRules,
+		"dbaas.firewall.remove-rule": h.handleFirewallRemoveRule,
 		// Agent callbacks
 		"dbaas.agent.ready":     h.handleAgentReady,
 		"dbaas.agent.heartbeat": h.handleAgentHeartbeat,
@@ -177,4 +209,36 @@ func (h *Handler) osRequest(subject string, req, resp any) error {
 // iamRequest makes a cross-service NATS request to iam-service with circuit breaker.
 func (h *Handler) iamRequest(subject string, req, resp any) error {
 	return h.svcRequest("iam", subject, req, resp)
+}
+
+// agentRequest routes a command to the primary node's agent for the given instance.
+func (h *Handler) agentRequest(ctx context.Context, instanceID, command string, req, resp any) error {
+	nodes, err := h.store.GetNodesByInstance(ctx, instanceID)
+	if err != nil {
+		return fmt.Errorf("get nodes: %w", err)
+	}
+
+	// Find the primary node
+	var primaryNodeID string
+	for _, n := range nodes {
+		if n.Role == "primary" && n.AgentConnected {
+			primaryNodeID = n.ID
+			break
+		}
+	}
+	if primaryNodeID == "" {
+		// Fallback: use first ready node (single-tier may not have role set yet)
+		for _, n := range nodes {
+			if n.AgentConnected {
+				primaryNodeID = n.ID
+				break
+			}
+		}
+	}
+	if primaryNodeID == "" {
+		return fmt.Errorf("no connected agent found for instance %s", instanceID)
+	}
+
+	subject := fmt.Sprintf("dbaas.agent.%s.%s", primaryNodeID, command)
+	return h.svcRequest("agent", subject, req, resp)
 }

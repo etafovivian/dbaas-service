@@ -1,0 +1,4 @@
+DROP TABLE IF EXISTS firewall_rules;
+ALTER TABLE instances DROP COLUMN IF EXISTS openstack_secgroup_id;
+ALTER TABLE users DROP COLUMN IF EXISTS databases;
+ALTER TABLE users DROP COLUMN IF EXISTS role;

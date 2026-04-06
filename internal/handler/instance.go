@@ -221,13 +221,24 @@ func (h *Handler) provisionInstance(inst *store.Instance, networkID string) {
 		log.Error("failed to update project id", "err", err)
 	}
 
-	// 3. Determine node count
+	// 3. Create security group for this instance
+	secgroupID, sgErr := h.createInstanceSecgroup(ctx, inst)
+	if sgErr != nil {
+		log.Error("failed to create security group", "err", sgErr)
+		_ = h.store.UpdateInstanceStatus(ctx, inst.ID, "error")
+		return
+	}
+	if err := h.store.UpdateInstanceSecgroupID(ctx, inst.ID, secgroupID); err != nil {
+		log.Error("failed to update secgroup id", "err", err)
+	}
+
+	// 4. Determine node count
 	nodeCount := 1
 	if inst.Tier == "ha" {
 		nodeCount = 3
 	}
 
-	// 4. Provision each node
+	// 5. Provision each node
 	var nodes []*store.InstanceNode
 	for i := range nodeCount {
 		node, nodeErr := h.provisionNode(ctx, inst, i, networkID)
@@ -290,6 +301,66 @@ func (h *Handler) ensureDbaasProject(ctx context.Context, projectName, tenantID,
 		return "", fmt.Errorf("create project %s: %w", projectName, err)
 	}
 	return project.ID, nil
+}
+
+// createInstanceSecgroup creates a security group for a dbaas instance with default rules.
+func (h *Handler) createInstanceSecgroup(ctx context.Context, inst *store.Instance) (string, error) {
+	sgName := fmt.Sprintf("dbaas-sg-%s", inst.ID)
+
+	// Resolve engine for default port
+	eng, err := h.engines.Get(inst.Engine)
+	if err != nil {
+		return "", fmt.Errorf("get engine: %w", err)
+	}
+	dbPort := eng.DefaultPort()
+
+	// Create security group
+	var sgResp struct {
+		ID string `json:"id"`
+	}
+	if err := h.osRequest("openstack.neutron.create-security-group", map[string]any{
+		"name":           sgName,
+		"description":    fmt.Sprintf("DBaaS firewall for instance %s", inst.Name),
+		"tenant_id":      inst.TenantID,
+		"environment_id": inst.EnvironmentID,
+	}, &sgResp); err != nil {
+		return "", fmt.Errorf("create security group: %w", err)
+	}
+
+	// Add default rules: allow DB port and pgBouncer port from 0.0.0.0/0
+	// Tenants can restrict via dbaas.firewall.add-rule later
+	defaultRules := []map[string]any{
+		{
+			"security_group_id": sgResp.ID,
+			"direction":         "ingress",
+			"protocol":          "tcp",
+			"port_range_min":    dbPort,
+			"port_range_max":    dbPort,
+			"remote_ip_prefix":  "0.0.0.0/0",
+			"description":       "Allow database port",
+			"tenant_id":         inst.TenantID,
+			"environment_id":    inst.EnvironmentID,
+		},
+		{
+			"security_group_id": sgResp.ID,
+			"direction":         "ingress",
+			"protocol":          "tcp",
+			"port_range_min":    6432,
+			"port_range_max":    6432,
+			"remote_ip_prefix":  "0.0.0.0/0",
+			"description":       "Allow connection pooler port",
+			"tenant_id":         inst.TenantID,
+			"environment_id":    inst.EnvironmentID,
+		},
+	}
+
+	for _, rule := range defaultRules {
+		if err := h.osRequest("openstack.neutron.create-security-group-rule", rule, nil); err != nil {
+			slog.Warn("failed to create default sg rule", "err", err)
+		}
+	}
+
+	return sgResp.ID, nil
 }
 
 // provisionNode creates a single VM + Cinder volume for a database node.

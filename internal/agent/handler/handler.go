@@ -36,7 +36,12 @@ func New(nc *nats.Conn, eng agentengine.AgentEngine, cfg *agentcfg.Config) *Hand
 func (h *Handler) RegisterSubscriptions() error {
 	prefix := fmt.Sprintf("dbaas.agent.%s", h.cfg.NodeID)
 	subs := map[string]nats.MsgHandler{
-		prefix + ".ping": h.handlePing,
+		prefix + ".ping":           h.handlePing,
+		prefix + ".database.create": h.handleDatabaseCreate,
+		prefix + ".database.delete": h.handleDatabaseDelete,
+		prefix + ".user.create":     h.handleUserCreate,
+		prefix + ".user.delete":     h.handleUserDelete,
+		prefix + ".user.reset-password": h.handleUserResetPassword,
 	}
 
 	for subj, hdlr := range subs {
@@ -120,5 +125,17 @@ func (h *Handler) handlePing(msg *nats.Msg) {
 		"instance_id": h.cfg.InstanceID,
 		"node_id":     h.cfg.NodeID,
 	})
+	_ = msg.Respond(resp)
+}
+
+// replyAgentOK sends a success response.
+func (h *Handler) replyAgentOK(msg *nats.Msg) {
+	resp, _ := json.Marshal(map[string]any{"ok": true})
+	_ = msg.Respond(resp)
+}
+
+// replyAgentErr sends an error response.
+func (h *Handler) replyAgentErr(msg *nats.Msg, errMsg string) {
+	resp, _ := json.Marshal(map[string]any{"ok": false, "error": errMsg})
 	_ = msg.Respond(resp)
 }

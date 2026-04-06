@@ -39,8 +39,9 @@ type Instance struct {
 	Port            int               `json:"port"`
 	AdminUser       string            `json:"admin_user"`
 	AdminPassword   string            `json:"-"` // never exposed in API responses
-	DbaasProjectID  *string           `json:"dbaas_project_id,omitempty"`
-	BackupBucket    *string           `json:"backup_bucket,omitempty"`
+	DbaasProjectID     *string           `json:"dbaas_project_id,omitempty"`
+	OpenstackSecgroupID *string        `json:"openstack_secgroup_id,omitempty"`
+	BackupBucket       *string         `json:"backup_bucket,omitempty"`
 	Metadata        map[string]string `json:"metadata"`
 	Nodes           []*InstanceNode   `json:"nodes,omitempty"`
 	CreatedAt       time.Time         `json:"created_at"`
@@ -76,11 +77,11 @@ func (s *Store) CreateInstance(ctx context.Context, tenantID, environmentID, nam
 		`INSERT INTO instances (tenant_id, environment_id, name, engine, engine_version, tier, flavor_id, disk_size_gb, admin_password, metadata, status)
 		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 'creating')
 		 RETURNING id, tenant_id, environment_id, name, engine, engine_version, tier, flavor_id, disk_size_gb,
-		           status, host, port, admin_user, admin_password, dbaas_project_id, backup_bucket, metadata, created_at, updated_at`,
+		           status, host, port, admin_user, admin_password, dbaas_project_id, openstack_secgroup_id, backup_bucket, metadata, created_at, updated_at`,
 		tenantID, environmentID, name, engine, engineVersion, tier, flavorID, diskSizeGB, adminPassword, metadata,
 	).Scan(&inst.ID, &inst.TenantID, &inst.EnvironmentID, &inst.Name, &inst.Engine, &inst.EngineVersion,
 		&inst.Tier, &inst.FlavorID, &inst.DiskSizeGB, &inst.Status, &inst.Host, &inst.Port,
-		&inst.AdminUser, &inst.AdminPassword, &inst.DbaasProjectID, &inst.BackupBucket, &inst.Metadata,
+		&inst.AdminUser, &inst.AdminPassword, &inst.DbaasProjectID, &inst.OpenstackSecgroupID, &inst.BackupBucket, &inst.Metadata,
 		&inst.CreatedAt, &inst.UpdatedAt)
 	if err != nil {
 		return nil, fmt.Errorf("insert instance: %w", err)
@@ -93,11 +94,11 @@ func (s *Store) GetInstance(ctx context.Context, id string) (*Instance, error) {
 	inst := &Instance{}
 	err := s.pool.QueryRow(ctx,
 		`SELECT id, tenant_id, environment_id, name, engine, engine_version, tier, flavor_id, disk_size_gb,
-		        status, host, port, admin_user, admin_password, dbaas_project_id, backup_bucket, metadata, created_at, updated_at
+		        status, host, port, admin_user, admin_password, dbaas_project_id, openstack_secgroup_id, backup_bucket, metadata, created_at, updated_at
 		 FROM instances WHERE id = $1 AND status != 'deleted'`, id,
 	).Scan(&inst.ID, &inst.TenantID, &inst.EnvironmentID, &inst.Name, &inst.Engine, &inst.EngineVersion,
 		&inst.Tier, &inst.FlavorID, &inst.DiskSizeGB, &inst.Status, &inst.Host, &inst.Port,
-		&inst.AdminUser, &inst.AdminPassword, &inst.DbaasProjectID, &inst.BackupBucket, &inst.Metadata,
+		&inst.AdminUser, &inst.AdminPassword, &inst.DbaasProjectID, &inst.OpenstackSecgroupID, &inst.BackupBucket, &inst.Metadata,
 		&inst.CreatedAt, &inst.UpdatedAt)
 	if err != nil {
 		return nil, fmt.Errorf("get instance %s: %w", id, err)
@@ -109,7 +110,7 @@ func (s *Store) GetInstance(ctx context.Context, id string) (*Instance, error) {
 func (s *Store) ListInstances(ctx context.Context, tenantID, environmentID string) ([]*Instance, error) {
 	rows, err := s.pool.Query(ctx,
 		`SELECT id, tenant_id, environment_id, name, engine, engine_version, tier, flavor_id, disk_size_gb,
-		        status, host, port, admin_user, dbaas_project_id, backup_bucket, metadata, created_at, updated_at
+		        status, host, port, admin_user, dbaas_project_id, openstack_secgroup_id, backup_bucket, metadata, created_at, updated_at
 		 FROM instances WHERE tenant_id = $1 AND environment_id = $2 AND status != 'deleted' ORDER BY created_at`, tenantID, environmentID)
 	if err != nil {
 		return nil, fmt.Errorf("list instances: %w", err)
@@ -121,7 +122,7 @@ func (s *Store) ListInstances(ctx context.Context, tenantID, environmentID strin
 		inst := &Instance{}
 		if err := rows.Scan(&inst.ID, &inst.TenantID, &inst.EnvironmentID, &inst.Name, &inst.Engine, &inst.EngineVersion,
 			&inst.Tier, &inst.FlavorID, &inst.DiskSizeGB, &inst.Status, &inst.Host, &inst.Port,
-			&inst.AdminUser, &inst.DbaasProjectID, &inst.BackupBucket, &inst.Metadata,
+			&inst.AdminUser, &inst.DbaasProjectID, &inst.OpenstackSecgroupID, &inst.BackupBucket, &inst.Metadata,
 			&inst.CreatedAt, &inst.UpdatedAt); err != nil {
 			return nil, fmt.Errorf("scan instance: %w", err)
 		}
@@ -328,7 +329,7 @@ func (s *Store) GetInstanceByNodeID(ctx context.Context, nodeID string) (*Instan
 		 WHERE n.id = $1 AND i.status != 'deleted'`, nodeID,
 	).Scan(&inst.ID, &inst.TenantID, &inst.EnvironmentID, &inst.Name, &inst.Engine, &inst.EngineVersion,
 		&inst.Tier, &inst.FlavorID, &inst.DiskSizeGB, &inst.Status, &inst.Host, &inst.Port,
-		&inst.AdminUser, &inst.AdminPassword, &inst.DbaasProjectID, &inst.BackupBucket, &inst.Metadata,
+		&inst.AdminUser, &inst.AdminPassword, &inst.DbaasProjectID, &inst.OpenstackSecgroupID, &inst.BackupBucket, &inst.Metadata,
 		&inst.CreatedAt, &inst.UpdatedAt)
 	if err != nil {
 		if err == pgx.ErrNoRows {
@@ -337,4 +338,292 @@ func (s *Store) GetInstanceByNodeID(ctx context.Context, nodeID string) (*Instan
 		return nil, fmt.Errorf("get instance by node: %w", err)
 	}
 	return inst, nil
+}
+
+// ---------- Database model + queries ----------
+
+// Database represents a logical database within a managed instance.
+type Database struct {
+	ID         string    `json:"id"`
+	InstanceID string    `json:"instance_id"`
+	TenantID   string    `json:"tenant_id"`
+	Name       string    `json:"name"`
+	Charset    string    `json:"charset"`
+	Collation  string    `json:"collation"`
+	Status     string    `json:"status"`
+	CreatedAt  time.Time `json:"created_at"`
+	UpdatedAt  time.Time `json:"updated_at"`
+}
+
+// CreateDatabase inserts a new database record with status 'creating'.
+func (s *Store) CreateDatabase(ctx context.Context, instanceID, tenantID, name, charset, collation string) (*Database, error) {
+	if charset == "" {
+		charset = "UTF8"
+	}
+	if collation == "" {
+		collation = "en_US.UTF-8"
+	}
+	d := &Database{}
+	err := s.pool.QueryRow(ctx,
+		`INSERT INTO databases (instance_id, tenant_id, name, charset, collation, status)
+		 VALUES ($1, $2, $3, $4, $5, 'creating')
+		 RETURNING id, instance_id, tenant_id, name, charset, collation, status, created_at, updated_at`,
+		instanceID, tenantID, name, charset, collation,
+	).Scan(&d.ID, &d.InstanceID, &d.TenantID, &d.Name, &d.Charset, &d.Collation,
+		&d.Status, &d.CreatedAt, &d.UpdatedAt)
+	if err != nil {
+		return nil, fmt.Errorf("insert database: %w", err)
+	}
+	return d, nil
+}
+
+// GetDatabase retrieves a database by ID (excludes deleted).
+func (s *Store) GetDatabase(ctx context.Context, id string) (*Database, error) {
+	d := &Database{}
+	err := s.pool.QueryRow(ctx,
+		`SELECT id, instance_id, tenant_id, name, charset, collation, status, created_at, updated_at
+		 FROM databases WHERE id = $1 AND status != 'deleted'`, id,
+	).Scan(&d.ID, &d.InstanceID, &d.TenantID, &d.Name, &d.Charset, &d.Collation,
+		&d.Status, &d.CreatedAt, &d.UpdatedAt)
+	if err != nil {
+		return nil, fmt.Errorf("get database %s: %w", id, err)
+	}
+	return d, nil
+}
+
+// ListDatabases returns all databases for an instance (excludes deleted).
+func (s *Store) ListDatabases(ctx context.Context, instanceID string) ([]*Database, error) {
+	rows, err := s.pool.Query(ctx,
+		`SELECT id, instance_id, tenant_id, name, charset, collation, status, created_at, updated_at
+		 FROM databases WHERE instance_id = $1 AND status != 'deleted' ORDER BY created_at`, instanceID)
+	if err != nil {
+		return nil, fmt.Errorf("list databases: %w", err)
+	}
+	defer rows.Close()
+
+	var dbs []*Database
+	for rows.Next() {
+		d := &Database{}
+		if err := rows.Scan(&d.ID, &d.InstanceID, &d.TenantID, &d.Name, &d.Charset, &d.Collation,
+			&d.Status, &d.CreatedAt, &d.UpdatedAt); err != nil {
+			return nil, fmt.Errorf("scan database: %w", err)
+		}
+		dbs = append(dbs, d)
+	}
+	return dbs, rows.Err()
+}
+
+// UpdateDatabaseStatus sets the status of a database.
+func (s *Store) UpdateDatabaseStatus(ctx context.Context, id, status string) error {
+	_, err := s.pool.Exec(ctx,
+		`UPDATE databases SET status = $1, updated_at = NOW() WHERE id = $2`, status, id)
+	if err != nil {
+		return fmt.Errorf("update database status: %w", err)
+	}
+	return nil
+}
+
+// SoftDeleteDatabase marks a database as deleted.
+func (s *Store) SoftDeleteDatabase(ctx context.Context, id string) error {
+	_, err := s.pool.Exec(ctx,
+		`UPDATE databases SET status = 'deleted', deleted_at = NOW(), updated_at = NOW() WHERE id = $1`, id)
+	if err != nil {
+		return fmt.Errorf("soft delete database: %w", err)
+	}
+	return nil
+}
+
+// ---------- User model + queries ----------
+
+// User represents a database user within a managed instance.
+type User struct {
+	ID         string    `json:"id"`
+	InstanceID string    `json:"instance_id"`
+	TenantID   string    `json:"tenant_id"`
+	Username   string    `json:"username"`
+	Role       string    `json:"role"`
+	Databases  []string  `json:"databases"`
+	Status     string    `json:"status"`
+	CreatedAt  time.Time `json:"created_at"`
+	UpdatedAt  time.Time `json:"updated_at"`
+}
+
+// CreateUser inserts a new user record with status 'creating'.
+func (s *Store) CreateUser(ctx context.Context, instanceID, tenantID, username, role string, databases []string) (*User, error) {
+	if databases == nil {
+		databases = []string{}
+	}
+	u := &User{}
+	err := s.pool.QueryRow(ctx,
+		`INSERT INTO users (instance_id, tenant_id, username, role, databases, status)
+		 VALUES ($1, $2, $3, $4, $5, 'creating')
+		 RETURNING id, instance_id, tenant_id, username, role, databases, status, created_at, updated_at`,
+		instanceID, tenantID, username, role, databases,
+	).Scan(&u.ID, &u.InstanceID, &u.TenantID, &u.Username, &u.Role, &u.Databases,
+		&u.Status, &u.CreatedAt, &u.UpdatedAt)
+	if err != nil {
+		return nil, fmt.Errorf("insert user: %w", err)
+	}
+	return u, nil
+}
+
+// GetUser retrieves a user by ID (excludes deleted).
+func (s *Store) GetUser(ctx context.Context, id string) (*User, error) {
+	u := &User{}
+	err := s.pool.QueryRow(ctx,
+		`SELECT id, instance_id, tenant_id, username, role, databases, status, created_at, updated_at
+		 FROM users WHERE id = $1 AND status != 'deleted'`, id,
+	).Scan(&u.ID, &u.InstanceID, &u.TenantID, &u.Username, &u.Role, &u.Databases,
+		&u.Status, &u.CreatedAt, &u.UpdatedAt)
+	if err != nil {
+		return nil, fmt.Errorf("get user %s: %w", id, err)
+	}
+	return u, nil
+}
+
+// ListUsers returns all users for an instance (excludes deleted).
+func (s *Store) ListUsers(ctx context.Context, instanceID string) ([]*User, error) {
+	rows, err := s.pool.Query(ctx,
+		`SELECT id, instance_id, tenant_id, username, role, databases, status, created_at, updated_at
+		 FROM users WHERE instance_id = $1 AND status != 'deleted' ORDER BY created_at`, instanceID)
+	if err != nil {
+		return nil, fmt.Errorf("list users: %w", err)
+	}
+	defer rows.Close()
+
+	var users []*User
+	for rows.Next() {
+		u := &User{}
+		if err := rows.Scan(&u.ID, &u.InstanceID, &u.TenantID, &u.Username, &u.Role, &u.Databases,
+			&u.Status, &u.CreatedAt, &u.UpdatedAt); err != nil {
+			return nil, fmt.Errorf("scan user: %w", err)
+		}
+		users = append(users, u)
+	}
+	return users, rows.Err()
+}
+
+// UpdateUserStatus sets the status of a user.
+func (s *Store) UpdateUserStatus(ctx context.Context, id, status string) error {
+	_, err := s.pool.Exec(ctx,
+		`UPDATE users SET status = $1, updated_at = NOW() WHERE id = $2`, status, id)
+	if err != nil {
+		return fmt.Errorf("update user status: %w", err)
+	}
+	return nil
+}
+
+// SoftDeleteUser marks a user as deleted.
+func (s *Store) SoftDeleteUser(ctx context.Context, id string) error {
+	_, err := s.pool.Exec(ctx,
+		`UPDATE users SET status = 'deleted', deleted_at = NOW(), updated_at = NOW() WHERE id = $1`, id)
+	if err != nil {
+		return fmt.Errorf("soft delete user: %w", err)
+	}
+	return nil
+}
+
+// ---------- Firewall Rule model + queries ----------
+
+// FirewallRule represents a security group rule for a database instance.
+type FirewallRule struct {
+	ID              string    `json:"id"`
+	InstanceID      string    `json:"instance_id"`
+	TenantID        string    `json:"tenant_id"`
+	Direction       string    `json:"direction"`
+	Protocol        string    `json:"protocol"`
+	PortRangeMin    *int      `json:"port_range_min,omitempty"`
+	PortRangeMax    *int      `json:"port_range_max,omitempty"`
+	RemoteIPPrefix  string    `json:"remote_ip_prefix"`
+	Description     string    `json:"description"`
+	OpenstackRuleID *string   `json:"openstack_rule_id,omitempty"`
+	Status          string    `json:"status"`
+	CreatedAt       time.Time `json:"created_at"`
+	UpdatedAt       time.Time `json:"updated_at"`
+}
+
+// CreateFirewallRule inserts a new firewall rule record.
+func (s *Store) CreateFirewallRule(ctx context.Context, instanceID, tenantID, direction, protocol string, portMin, portMax *int, remoteIPPrefix, description string) (*FirewallRule, error) {
+	r := &FirewallRule{}
+	err := s.pool.QueryRow(ctx,
+		`INSERT INTO firewall_rules (instance_id, tenant_id, direction, protocol, port_range_min, port_range_max, remote_ip_prefix, description, status)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'creating')
+		 RETURNING id, instance_id, tenant_id, direction, protocol, port_range_min, port_range_max, remote_ip_prefix, description, openstack_rule_id, status, created_at, updated_at`,
+		instanceID, tenantID, direction, protocol, portMin, portMax, remoteIPPrefix, description,
+	).Scan(&r.ID, &r.InstanceID, &r.TenantID, &r.Direction, &r.Protocol, &r.PortRangeMin, &r.PortRangeMax,
+		&r.RemoteIPPrefix, &r.Description, &r.OpenstackRuleID, &r.Status, &r.CreatedAt, &r.UpdatedAt)
+	if err != nil {
+		return nil, fmt.Errorf("insert firewall rule: %w", err)
+	}
+	return r, nil
+}
+
+// UpdateFirewallRuleOpenstackID sets the OpenStack security group rule ID.
+func (s *Store) UpdateFirewallRuleOpenstackID(ctx context.Context, id, ruleID string) error {
+	_, err := s.pool.Exec(ctx,
+		`UPDATE firewall_rules SET openstack_rule_id = $1, status = 'active', updated_at = NOW() WHERE id = $2`, ruleID, id)
+	if err != nil {
+		return fmt.Errorf("update firewall rule openstack id: %w", err)
+	}
+	return nil
+}
+
+// ListFirewallRules returns all firewall rules for an instance (excludes deleted).
+func (s *Store) ListFirewallRules(ctx context.Context, instanceID string) ([]*FirewallRule, error) {
+	rows, err := s.pool.Query(ctx,
+		`SELECT id, instance_id, tenant_id, direction, protocol, port_range_min, port_range_max,
+		        remote_ip_prefix, description, openstack_rule_id, status, created_at, updated_at
+		 FROM firewall_rules WHERE instance_id = $1 AND status != 'deleted' ORDER BY created_at`, instanceID)
+	if err != nil {
+		return nil, fmt.Errorf("list firewall rules: %w", err)
+	}
+	defer rows.Close()
+
+	var rules []*FirewallRule
+	for rows.Next() {
+		r := &FirewallRule{}
+		if err := rows.Scan(&r.ID, &r.InstanceID, &r.TenantID, &r.Direction, &r.Protocol,
+			&r.PortRangeMin, &r.PortRangeMax, &r.RemoteIPPrefix, &r.Description,
+			&r.OpenstackRuleID, &r.Status, &r.CreatedAt, &r.UpdatedAt); err != nil {
+			return nil, fmt.Errorf("scan firewall rule: %w", err)
+		}
+		rules = append(rules, r)
+	}
+	return rules, rows.Err()
+}
+
+// GetFirewallRule retrieves a firewall rule by ID.
+func (s *Store) GetFirewallRule(ctx context.Context, id string) (*FirewallRule, error) {
+	r := &FirewallRule{}
+	err := s.pool.QueryRow(ctx,
+		`SELECT id, instance_id, tenant_id, direction, protocol, port_range_min, port_range_max,
+		        remote_ip_prefix, description, openstack_rule_id, status, created_at, updated_at
+		 FROM firewall_rules WHERE id = $1 AND status != 'deleted'`, id,
+	).Scan(&r.ID, &r.InstanceID, &r.TenantID, &r.Direction, &r.Protocol,
+		&r.PortRangeMin, &r.PortRangeMax, &r.RemoteIPPrefix, &r.Description,
+		&r.OpenstackRuleID, &r.Status, &r.CreatedAt, &r.UpdatedAt)
+	if err != nil {
+		return nil, fmt.Errorf("get firewall rule %s: %w", id, err)
+	}
+	return r, nil
+}
+
+// SoftDeleteFirewallRule marks a firewall rule as deleted.
+func (s *Store) SoftDeleteFirewallRule(ctx context.Context, id string) error {
+	_, err := s.pool.Exec(ctx,
+		`UPDATE firewall_rules SET status = 'deleted', updated_at = NOW() WHERE id = $1`, id)
+	if err != nil {
+		return fmt.Errorf("soft delete firewall rule: %w", err)
+	}
+	return nil
+}
+
+// UpdateInstanceSecgroupID sets the OpenStack security group ID for an instance.
+func (s *Store) UpdateInstanceSecgroupID(ctx context.Context, id, secgroupID string) error {
+	_, err := s.pool.Exec(ctx,
+		`UPDATE instances SET openstack_secgroup_id = $1, updated_at = NOW() WHERE id = $2`, secgroupID, id)
+	if err != nil {
+		return fmt.Errorf("update instance secgroup id: %w", err)
+	}
+	return nil
 }
