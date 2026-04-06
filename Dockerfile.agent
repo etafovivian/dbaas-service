@@ -4,14 +4,10 @@ WORKDIR /src
 # Copy shared library first (needed by replace directive)
 COPY etafovivian-shared/ ./etafovivian-shared/
 
-# Copy module files and download deps
-COPY dbaas-service/go.mod dbaas-service/go.sum ./dbaas-service/
+# Copy source
+COPY dbaas-service/ ./dbaas-service/
 WORKDIR /src/dbaas-service
-RUN go mod download
-
-# Copy source and build agent
-COPY dbaas-service/ ./
-RUN go mod tidy
+RUN go mod tidy && go mod download
 ARG VERSION=dev
 RUN CGO_ENABLED=0 go build \
     -ldflags="-s -w -X main.version=${VERSION}" \
