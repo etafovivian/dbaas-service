@@ -32,6 +32,10 @@ jobs:
         working-directory: dbaas-service
         run: go mod edit -replace github.com/etafovivian/shared=../etafovivian-shared
 
+      - name: Generate go.sum
+        working-directory: dbaas-service
+        run: go mod tidy
+
       - name: Run tests
         working-directory: dbaas-service
         run: go test -race -count=1 -timeout 120s -cover ./...
