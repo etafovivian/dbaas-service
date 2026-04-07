@@ -8,7 +8,6 @@ import (
 	"syscall"
 
 	agentcfg "github.com/etafovivian/dbaas-service/internal/agent/config"
-	agentengine "github.com/etafovivian/dbaas-service/internal/agent/engine"
 	pgagent "github.com/etafovivian/dbaas-service/internal/agent/engine/postgres"
 	agenthandler "github.com/etafovivian/dbaas-service/internal/agent/handler"
 	"github.com/nats-io/nats.go"
@@ -43,18 +42,28 @@ func main() {
 	defer func() { _ = nc.Drain() }()
 	slog.Info("connected to NATS")
 
-	// Create engine-specific handler
-	// To add MariaDB: check cfg env var for engine type and create the right engine
-	var eng agentengine.AgentEngine
-	eng = pgagent.New(cfg.PGAdminUser, cfg.PGAdminPass)
+	// Create PostgreSQL engine using INTERNAL credentials (the PG superuser).
+	// The agent always connects as the internal user for management operations.
+	eng := pgagent.New(cfg.PGInternalUser, cfg.PGInternalPass)
 
-	// Wait for database to be ready (engine-specific)
+	// Wait for database to be ready
 	if err := eng.WaitReady(ctx); err != nil {
 		slog.Error("database not ready", "err", err)
 		os.Exit(1)
 	}
 	defer eng.Close(ctx)
 	slog.Info("database is ready", "engine", eng.Name())
+
+	// Create the tenant admin user on first boot (idempotent).
+	// This user gets full privileges — tenants connect via pgAdmin with these creds.
+	if cfg.PGAdminUser != "" && cfg.PGAdminPass != "" {
+		if err := eng.EnsureTenantAdmin(ctx, cfg.PGAdminUser, cfg.PGAdminPass); err != nil {
+			slog.Error("failed to create tenant admin user", "err", err)
+			// Non-fatal — agent can still operate, tenant just can't connect directly yet
+		} else {
+			slog.Info("tenant admin user ready", "username", cfg.PGAdminUser)
+		}
+	}
 
 	// Create handler and register subscriptions
 	h := agenthandler.New(nc, eng, cfg)
@@ -66,7 +75,6 @@ func main() {
 	// Notify dbaas-service that we're ready
 	if err := h.PublishReady(); err != nil {
 		slog.Error("failed to publish ready", "err", err)
-		// Don't exit — the service will detect via heartbeat eventually
 	} else {
 		slog.Info("published ready to dbaas-service")
 	}

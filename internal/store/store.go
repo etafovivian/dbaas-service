@@ -37,8 +37,10 @@ type Instance struct {
 	Status          string            `json:"status"`
 	Host            *string           `json:"host,omitempty"`
 	Port            int               `json:"port"`
-	AdminUser       string            `json:"admin_user"`
-	AdminPassword   string            `json:"-"` // never exposed in API responses
+	AdminUser        string            `json:"admin_user"`
+	AdminPassword    string            `json:"-"` // never exposed via list, returned once on create
+	InternalUser     string            `json:"-"` // dbaas-agent superuser, never exposed
+	InternalPassword string            `json:"-"` // dbaas-agent password, never exposed
 	DbaasProjectID     *string           `json:"dbaas_project_id,omitempty"`
 	OpenstackSecgroupID *string        `json:"openstack_secgroup_id,omitempty"`
 	BackupBucket       *string         `json:"backup_bucket,omitempty"`
@@ -68,20 +70,20 @@ type InstanceNode struct {
 // ---------- Instance queries ----------
 
 // CreateInstance inserts a new instance with status 'creating' and returns it.
-func (s *Store) CreateInstance(ctx context.Context, tenantID, environmentID, name, engine, engineVersion, tier, flavorID string, diskSizeGB int, adminPassword string, metadata map[string]string) (*Instance, error) {
+func (s *Store) CreateInstance(ctx context.Context, tenantID, environmentID, name, engine, engineVersion, tier, flavorID string, diskSizeGB int, adminUser, adminPassword, internalUser, internalPassword string, metadata map[string]string) (*Instance, error) {
 	if metadata == nil {
 		metadata = make(map[string]string)
 	}
 	inst := &Instance{}
 	err := s.pool.QueryRow(ctx,
-		`INSERT INTO instances (tenant_id, environment_id, name, engine, engine_version, tier, flavor_id, disk_size_gb, admin_password, metadata, status)
-		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 'creating')
+		`INSERT INTO instances (tenant_id, environment_id, name, engine, engine_version, tier, flavor_id, disk_size_gb, admin_user, admin_password, internal_user, internal_password, metadata, status)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, 'creating')
 		 RETURNING id, tenant_id, environment_id, name, engine, engine_version, tier, flavor_id, disk_size_gb,
-		           status, host, port, admin_user, admin_password, dbaas_project_id, openstack_secgroup_id, backup_bucket, metadata, created_at, updated_at`,
-		tenantID, environmentID, name, engine, engineVersion, tier, flavorID, diskSizeGB, adminPassword, metadata,
+		           status, host, port, admin_user, admin_password, internal_user, internal_password, dbaas_project_id, openstack_secgroup_id, backup_bucket, metadata, created_at, updated_at`,
+		tenantID, environmentID, name, engine, engineVersion, tier, flavorID, diskSizeGB, adminUser, adminPassword, internalUser, internalPassword, metadata,
 	).Scan(&inst.ID, &inst.TenantID, &inst.EnvironmentID, &inst.Name, &inst.Engine, &inst.EngineVersion,
 		&inst.Tier, &inst.FlavorID, &inst.DiskSizeGB, &inst.Status, &inst.Host, &inst.Port,
-		&inst.AdminUser, &inst.AdminPassword, &inst.DbaasProjectID, &inst.OpenstackSecgroupID, &inst.BackupBucket, &inst.Metadata,
+		&inst.AdminUser, &inst.AdminPassword, &inst.InternalUser, &inst.InternalPassword, &inst.DbaasProjectID, &inst.OpenstackSecgroupID, &inst.BackupBucket, &inst.Metadata,
 		&inst.CreatedAt, &inst.UpdatedAt)
 	if err != nil {
 		return nil, fmt.Errorf("insert instance: %w", err)
@@ -94,11 +96,11 @@ func (s *Store) GetInstance(ctx context.Context, id string) (*Instance, error) {
 	inst := &Instance{}
 	err := s.pool.QueryRow(ctx,
 		`SELECT id, tenant_id, environment_id, name, engine, engine_version, tier, flavor_id, disk_size_gb,
-		        status, host, port, admin_user, admin_password, dbaas_project_id, openstack_secgroup_id, backup_bucket, metadata, created_at, updated_at
+		        status, host, port, admin_user, admin_password, internal_user, internal_password, dbaas_project_id, openstack_secgroup_id, backup_bucket, metadata, created_at, updated_at
 		 FROM instances WHERE id = $1 AND status != 'deleted'`, id,
 	).Scan(&inst.ID, &inst.TenantID, &inst.EnvironmentID, &inst.Name, &inst.Engine, &inst.EngineVersion,
 		&inst.Tier, &inst.FlavorID, &inst.DiskSizeGB, &inst.Status, &inst.Host, &inst.Port,
-		&inst.AdminUser, &inst.AdminPassword, &inst.DbaasProjectID, &inst.OpenstackSecgroupID, &inst.BackupBucket, &inst.Metadata,
+		&inst.AdminUser, &inst.AdminPassword, &inst.InternalUser, &inst.InternalPassword, &inst.DbaasProjectID, &inst.OpenstackSecgroupID, &inst.BackupBucket, &inst.Metadata,
 		&inst.CreatedAt, &inst.UpdatedAt)
 	if err != nil {
 		return nil, fmt.Errorf("get instance %s: %w", id, err)
@@ -323,13 +325,15 @@ func (s *Store) GetInstanceByNodeID(ctx context.Context, nodeID string) (*Instan
 	err := s.pool.QueryRow(ctx,
 		`SELECT i.id, i.tenant_id, i.environment_id, i.name, i.engine, i.engine_version, i.tier,
 		        i.flavor_id, i.disk_size_gb, i.status, i.host, i.port, i.admin_user, i.admin_password,
-		        i.dbaas_project_id, i.backup_bucket, i.metadata, i.created_at, i.updated_at
+		        i.internal_user, i.internal_password,
+		        i.dbaas_project_id, i.openstack_secgroup_id, i.backup_bucket, i.metadata, i.created_at, i.updated_at
 		 FROM instances i
 		 JOIN instance_nodes n ON n.instance_id = i.id
 		 WHERE n.id = $1 AND i.status != 'deleted'`, nodeID,
 	).Scan(&inst.ID, &inst.TenantID, &inst.EnvironmentID, &inst.Name, &inst.Engine, &inst.EngineVersion,
 		&inst.Tier, &inst.FlavorID, &inst.DiskSizeGB, &inst.Status, &inst.Host, &inst.Port,
-		&inst.AdminUser, &inst.AdminPassword, &inst.DbaasProjectID, &inst.OpenstackSecgroupID, &inst.BackupBucket, &inst.Metadata,
+		&inst.AdminUser, &inst.AdminPassword, &inst.InternalUser, &inst.InternalPassword,
+		&inst.DbaasProjectID, &inst.OpenstackSecgroupID, &inst.BackupBucket, &inst.Metadata,
 		&inst.CreatedAt, &inst.UpdatedAt)
 	if err != nil {
 		if err == pgx.ErrNoRows {

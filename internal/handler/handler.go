@@ -20,7 +20,7 @@ import (
 // StoreClient defines the database operations used by handlers.
 type StoreClient interface {
 	// Instances
-	CreateInstance(ctx context.Context, tenantID, environmentID, name, engine, engineVersion, tier, flavorID string, diskSizeGB int, adminPassword string, metadata map[string]string) (*store.Instance, error)
+	CreateInstance(ctx context.Context, tenantID, environmentID, name, engine, engineVersion, tier, flavorID string, diskSizeGB int, adminUser, adminPassword, internalUser, internalPassword string, metadata map[string]string) (*store.Instance, error)
 	GetInstance(ctx context.Context, id string) (*store.Instance, error)
 	ListInstances(ctx context.Context, tenantID, environmentID string) ([]*store.Instance, error)
 	UpdateInstanceStatus(ctx context.Context, id, status string) error

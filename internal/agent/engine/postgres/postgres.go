@@ -89,6 +89,45 @@ func (e *Engine) Close(ctx context.Context) {
 	}
 }
 
+// EnsureTenantAdmin creates the tenant-facing admin user with full privileges.
+// Idempotent — if the user already exists, it updates the password.
+// This user can CREATE DATABASE, CREATE ROLE, install extensions, etc.
+// but is NOT a SUPERUSER (can't modify replication or system settings).
+func (e *Engine) EnsureTenantAdmin(ctx context.Context, username, password string) error {
+	// Check if role already exists.
+	var exists bool
+	err := e.conn.QueryRow(ctx,
+		`SELECT EXISTS(SELECT 1 FROM pg_roles WHERE rolname = $1)`, username).Scan(&exists)
+	if err != nil {
+		return fmt.Errorf("check role exists: %w", err)
+	}
+
+	if exists {
+		// Update password in case it changed.
+		sql := fmt.Sprintf(`ALTER ROLE %q PASSWORD '%s'`, username, password)
+		if _, err := e.conn.Exec(ctx, sql); err != nil {
+			return fmt.Errorf("update admin password: %w", err)
+		}
+		return nil
+	}
+
+	// Create the tenant admin with full privileges (but not SUPERUSER).
+	sql := fmt.Sprintf(
+		`CREATE ROLE %q LOGIN PASSWORD '%s' CREATEDB CREATEROLE NOSUPERUSER`,
+		username, password)
+	if _, err := e.conn.Exec(ctx, sql); err != nil {
+		return fmt.Errorf("create admin role: %w", err)
+	}
+
+	// Grant access to postgres database (tenant admin can connect anywhere).
+	grantConnect := fmt.Sprintf(`GRANT CONNECT ON DATABASE postgres TO %q`, username)
+	if _, err := e.conn.Exec(ctx, grantConnect); err != nil {
+		slog.Warn("grant connect to postgres failed", "err", err)
+	}
+
+	return nil
+}
+
 // dsn returns a connection string for the given database.
 func (e *Engine) dsn(database string) string {
 	return fmt.Sprintf("postgres://%s:%s@localhost:5432/%s?sslmode=disable", e.user, e.password, database)

@@ -103,6 +103,7 @@ type instanceResponse struct {
 	Host          *string           `json:"host,omitempty"`
 	Port          int               `json:"port"`
 	AdminUser     string            `json:"admin_user"`
+	AdminPassword string            `json:"admin_password,omitempty"` // only returned on create
 	Metadata      map[string]string `json:"metadata"`
 	Nodes         []*store.InstanceNode `json:"nodes,omitempty"`
 	CreatedAt     time.Time         `json:"created_at"`
@@ -167,27 +168,39 @@ func (h *Handler) handleInstanceCreate(msg *nats.Msg) {
 		return
 	}
 
-	// Generate admin password
+	// Generate tenant admin password + internal agent password
 	adminPass, err := generatePassword(32)
 	if err != nil {
-		h.replyErr(msg, subj, "generate password: "+err.Error())
+		h.replyErr(msg, subj, "generate admin password: "+err.Error())
 		return
 	}
+	internalPass, err := generatePassword(32)
+	if err != nil {
+		h.replyErr(msg, subj, "generate internal password: "+err.Error())
+		return
+	}
+
+	adminUser := eng.DefaultAdminUser()          // e.g. "dbadmin"
+	internalUser := "dbaas_internal"              // hidden superuser for agent
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
 	// Insert instance with status='creating'
 	inst, err := h.store.CreateInstance(ctx, req.TenantID, req.EnvironmentID, req.Name,
-		req.Engine, req.EngineVersion, req.Tier, req.FlavorID, req.DiskSizeGB, adminPass, req.Metadata)
+		req.Engine, req.EngineVersion, req.Tier, req.FlavorID, req.DiskSizeGB,
+		adminUser, adminPass, internalUser, internalPass, req.Metadata)
 	if err != nil {
 		h.replyErr(msg, subj, "create instance: "+err.Error())
 		return
 	}
 
-	// Reply immediately — provisioning continues in background
+	// Reply immediately with credentials — provisioning continues in background
+	// Admin password is only returned on create (never on get/list)
+	resp := instanceToResponse(inst)
+	resp.AdminPassword = adminPass
 	h.m.NATSRequests.WithLabelValues(subj, "ok").Inc()
-	natsutil.ReplyOK(msg, instanceToResponse(inst))
+	natsutil.ReplyOK(msg, resp)
 
 	// Launch async provisioning
 	go h.provisionInstance(inst, req.NetworkID)
@@ -396,14 +409,16 @@ func (h *Handler) provisionNode(ctx context.Context, inst *store.Instance, nodeI
 		return nil, fmt.Errorf("get engine: %w", engErr)
 	}
 	cloudInit, err := renderCloudInit(eng, engine.InstanceConfig{
-		InstanceID:    inst.ID,
-		NodeID:        node.ID,
-		NodeIndex:     nodeIndex,
-		EngineVersion: inst.EngineVersion,
-		AdminUser:     inst.AdminUser,
-		AdminPassword: inst.AdminPassword,
-		Tier:          inst.Tier,
-		AgentVersion:  h.agentVersion,
+		InstanceID:       inst.ID,
+		NodeID:           node.ID,
+		NodeIndex:        nodeIndex,
+		EngineVersion:    inst.EngineVersion,
+		AdminUser:        inst.AdminUser,
+		AdminPassword:    inst.AdminPassword,
+		InternalUser:     inst.InternalUser,
+		InternalPassword: inst.InternalPassword,
+		Tier:             inst.Tier,
+		AgentVersion:     h.agentVersion,
 	}, h.nc.Opts.Url)
 	if err != nil {
 		_ = h.store.UpdateNodeStatus(ctx, node.ID, "error")

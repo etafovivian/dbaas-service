@@ -4,15 +4,15 @@ services:
     container_name: dbaas-postgres
     restart: unless-stopped
     environment:
-      POSTGRES_USER: {{.AdminUser}}
-      POSTGRES_PASSWORD: {{.AdminPassword}}
+      POSTGRES_USER: {{.InternalUser}}
+      POSTGRES_PASSWORD: {{.InternalPassword}}
       PGDATA: /var/lib/postgresql/data/pgdata
     volumes:
       - /var/lib/postgresql/data:/var/lib/postgresql/data
     ports:
       - "5432:5432"
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U {{.AdminUser}}"]
+      test: ["CMD-SHELL", "pg_isready -U {{.InternalUser}}"]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -26,8 +26,8 @@ services:
       PGBOUNCER_DATABASE: "*"
       POSTGRESQL_HOST: postgres
       POSTGRESQL_PORT: "5432"
-      POSTGRESQL_USERNAME: {{.AdminUser}}
-      POSTGRESQL_PASSWORD: {{.AdminPassword}}
+      POSTGRESQL_USERNAME: {{.InternalUser}}
+      POSTGRESQL_PASSWORD: {{.InternalPassword}}
       PGBOUNCER_POOL_MODE: transaction
       PGBOUNCER_MAX_CLIENT_CONN: "200"
       PGBOUNCER_DEFAULT_POOL_SIZE: "25"

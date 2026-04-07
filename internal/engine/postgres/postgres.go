@@ -27,7 +27,7 @@ func New() *Engine {
 func (e *Engine) Name() string           { return "postgres" }
 func (e *Engine) DefaultVersion() string  { return "18" }
 func (e *Engine) DefaultPort() int        { return 5432 }
-func (e *Engine) DefaultAdminUser() string { return "etafovivian_admin" }
+func (e *Engine) DefaultAdminUser() string { return "dbadmin" }
 func (e *Engine) DataDir() string         { return "/var/lib/postgresql/data" }
 func (e *Engine) DataDirOwner() string    { return "999:999" }
 
@@ -51,10 +51,14 @@ func (e *Engine) ComposeYAML(cfg engine.InstanceConfig) (string, error) {
 }
 
 // CloudInitEnv returns PostgreSQL-specific environment variables.
+// The agent uses InternalUser/InternalPassword to connect to PG.
+// AdminUser/AdminPassword are the tenant-facing credentials.
 func (e *Engine) CloudInitEnv(cfg engine.InstanceConfig) map[string]string {
 	return map[string]string{
-		"PG_VERSION":        cfg.EngineVersion,
-		"PG_ADMIN_USER":     cfg.AdminUser,
-		"PG_ADMIN_PASSWORD": cfg.AdminPassword,
+		"PG_VERSION":           cfg.EngineVersion,
+		"PG_INTERNAL_USER":     cfg.InternalUser,
+		"PG_INTERNAL_PASSWORD": cfg.InternalPassword,
+		"PG_ADMIN_USER":        cfg.AdminUser,
+		"PG_ADMIN_PASSWORD":    cfg.AdminPassword,
 	}
 }

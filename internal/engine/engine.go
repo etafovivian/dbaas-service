@@ -33,12 +33,14 @@ type Engine interface {
 
 // InstanceConfig holds engine-agnostic instance parameters passed to engine methods.
 type InstanceConfig struct {
-	InstanceID    string
-	NodeID        string
-	NodeIndex     int
-	EngineVersion string
-	AdminUser     string
-	AdminPassword string
-	Tier          string
-	AgentVersion  string
+	InstanceID       string
+	NodeID           string
+	NodeIndex        int
+	EngineVersion    string
+	AdminUser        string // Tenant-facing admin user (full PG privileges)
+	AdminPassword    string // Tenant-facing admin password
+	InternalUser     string // dbaas-agent internal superuser (hidden from tenant)
+	InternalPassword string // dbaas-agent internal password
+	Tier             string
+	AgentVersion     string
 }
